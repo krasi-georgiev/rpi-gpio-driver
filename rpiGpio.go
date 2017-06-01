@@ -118,7 +118,9 @@ func (c *Control) StartTimer(ch chan string) error {
 	}
 	r := fmt.Sprintf("Pin %v got 'HIGH' on drugs for %v seconds", c.Pin, c.Delay)
 	log.Printf(r)
-	ch <- r
+	if ch != nil {
+		ch <- r
+	}
 	time.Sleep(c.Delay)
 	if err := ioutil.WriteFile(sysfs+"gpio"+c.Pin+"/value", []byte("0"), 0644); err != nil {
 		return err
