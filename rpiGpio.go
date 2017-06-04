@@ -25,6 +25,12 @@ const DefaultDelay = 2
 // DefaultPin used as a default if not explicitly set
 const DefaultPin = "18"
 
+// Controller interface describes the main funcitons when triggering a pin
+type Controller interface {
+	StartTimer(ch chan string) error
+	Toggle(ch chan string) error
+}
+
 //NewControl the constructor with some defaults
 func NewControl() *Control {
 	return &Control{
