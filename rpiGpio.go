@@ -95,7 +95,6 @@ func (c *Control) enablePin() error {
 		if err := ioutil.WriteFile(sysfs+"gpio"+c.Pin+"/direction", []byte("out"), 0644); err != nil {
 			return err
 		}
-		log.Printf("Output %v ready for work!", c.Pin)
 	}
 	return nil
 }
@@ -110,7 +109,6 @@ func (c *Control) disablePin() {
 	if err != nil {
 		log.Printf("Oops can't disable pin %v because %v", c.Pin, err)
 	}
-	log.Printf("Disabled pin %v", c.Pin)
 }
 
 // StartTimer enable and then disable a pin output using a set delay
@@ -123,7 +121,6 @@ func (c *Control) StartTimer(ch chan string) error {
 		return err
 	}
 	r := fmt.Sprintf("Pin %v got 'HIGH' on drugs for %v seconds", c.Pin, c.Delay)
-	log.Printf(r)
 	if ch != nil {
 		ch <- r
 	}
@@ -131,7 +128,6 @@ func (c *Control) StartTimer(ch chan string) error {
 	if err := ioutil.WriteFile(sysfs+"gpio"+c.Pin+"/value", []byte("0"), 0644); err != nil {
 		return err
 	}
-	log.Printf("pin %v is laid 'LOW'", c.Pin)
 	return nil
 }
 
@@ -151,7 +147,6 @@ func (c *Control) Toggle(ch chan string) error {
 			return err
 		}
 		r := fmt.Sprintf("pin %v just got 'LOW' on selfesteam", c.Pin)
-		log.Printf(r)
 		ch <- r
 		return nil
 	}
@@ -159,7 +154,6 @@ func (c *Control) Toggle(ch chan string) error {
 		return err
 	}
 	r := fmt.Sprintf("pin %v just got 'HIGH' on drugs", c.Pin)
-	log.Printf(r)
 	ch <- r
 	return nil
 }
