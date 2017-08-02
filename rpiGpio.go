@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -19,11 +20,9 @@ const sysfs string = "/sys/class/gpio/"
 const sysfsGPIOenable string = sysfs + "export"
 const sysfsGPIOdisable string = sysfs + "unexport"
 
-// DefaultDelay  used as a default if not explicitly set
 const DefaultDelay = 2
-
-// DefaultPin used as a default if not explicitly set
 const DefaultPin = "18"
+const DefaultType = "timer"
 
 // Controller interface describes the main funcitons when triggering a pin
 type Controller interface {
@@ -32,67 +31,82 @@ type Controller interface {
 }
 
 //NewControl the constructor with some defaults
-func NewControl() *Control {
-	return &Control{
-		Type:  "timer",
-		Pin:   DefaultPin,
-		Delay: DefaultDelay * time.Second,
+func NewControl(opts ...func(*Control) error) (*Control, error) {
+	ctrl := &Control{}
+	for _, o := range opts {
+		if err := o(ctrl); err != nil {
+			return nil, err
+		}
 	}
+
+	return ctrl, nil
 }
 
 // Control holds all configuration
 type Control struct {
-	Type  string
-	Pin   string
-	Delay time.Duration
+	ctype string
+	pin   string
+	delay time.Duration
 }
 
-// SetType is the controller type setter
-func (c *Control) SetType(d string) error {
-	switch d {
-	case "timer":
+// SetType is the controller ctype setter
+func SetType(d string) func(*Control) error {
+	return func(c *Control) error {
+		switch strings.TrimSpace(d) {
+		case "":
+			c.ctype = DefaultType
+		case "timer", "toggle":
+			c.ctype = strings.TrimSpace(d)
+		default:
+			return errors.New("Invalid control type:" + d)
+		}
 		return nil
-	case "toggle":
-		c.Type = d
-	default:
-		return errors.New("Invalid control type:" + d)
 	}
-	return nil
 }
 
 //SetPin the pin on gpio that willbe controlled
-func (c *Control) SetPin(d string) error {
-	for _, v := range gpioPins {
-		if strconv.Itoa(v) == d {
-			c.Pin = d
+func SetPin(d string) func(*Control) error {
+	return func(c *Control) error {
+		if d == "" {
+			c.pin = DefaultPin
 			return nil
 		}
-
+		for _, v := range gpioPins {
+			if strconv.Itoa(v) == d {
+				c.pin = d
+				return nil
+			}
+		}
+		sort.Ints(gpioPins)
+		return fmt.Errorf("Invalid GPIO pin number:%v, choose one of :%v", d, gpioPins)
 	}
-	sort.Ints(gpioPins)
-	return errors.New(fmt.Sprintf("Invalid GPIO pin number:%v, choose one of :%v", d, gpioPins))
 }
 
 // SetDelay delay between enable and disable timer
-func (c *Control) SetDelay(d string) error {
-	if t, err := time.ParseDuration(d); err == nil {
-		c.Delay = t
-		return nil
+func SetDelay(d string) func(*Control) error {
+	return func(c *Control) error {
+		if d == "" {
+			c.delay = DefaultDelay
+			return nil
+		}
+		if t, err := time.ParseDuration(d); err == nil {
+			c.delay = t
+			return nil
+		}
+		return fmt.Errorf("Invalid time delay format :%v (use 1ms, 1s, 1m, 1h)", d)
 	}
-	return errors.New(fmt.Sprintf("Invalid time delay format :%v (use 1ms, 1s, 1m, 1h)", d[0]))
 }
 
 func (c *Control) enablePin() error {
 	// enable if not already enabled
-	if _, err := os.Stat(sysfs + "gpio" + c.Pin); os.IsNotExist(err) {
+	if _, err := os.Stat(sysfs + "gpio" + c.pin); os.IsNotExist(err) {
 		if _, err := os.Stat(sysfsGPIOenable); os.IsNotExist(err) {
 			return err
 		}
-
-		if err := ioutil.WriteFile(sysfsGPIOenable, []byte(c.Pin), 0644); err != nil {
+		if err := ioutil.WriteFile(sysfsGPIOenable, []byte(c.pin), 0644); err != nil {
 			return err
 		}
-		if err := ioutil.WriteFile(sysfs+"gpio"+c.Pin+"/direction", []byte("out"), 0644); err != nil {
+		if err := ioutil.WriteFile(sysfs+"gpio"+c.pin+"/direction", []byte("out"), 0644); err != nil {
 			return err
 		}
 	}
@@ -100,60 +114,64 @@ func (c *Control) enablePin() error {
 }
 
 func (c *Control) disablePin() {
-	if _, err := os.Stat(sysfs + "gpio" + c.Pin); os.IsNotExist(err) {
+	if _, err := os.Stat(sysfs + "gpio" + c.pin); os.IsNotExist(err) {
 		// it is already disabled so nothing else to do, bail out
 		return
 	}
 
-	err := ioutil.WriteFile(sysfsGPIOdisable, []byte(c.Pin), 0644)
+	err := ioutil.WriteFile(sysfsGPIOdisable, []byte(c.pin), 0644)
 	if err != nil {
-		log.Printf("Oops can't disable pin %v because %v", c.Pin, err)
+		log.Printf("Oops can't disable pin %v because %v", c.pin, err)
 	}
 }
 
-// StartTimer enable and then disable a pin output using a set delay
-func (c *Control) StartTimer(ch chan string) error {
+// Run executes the control with the initiated settings
+func (c *Control) Run() error {
+	switch c.ctype {
+	case "timer":
+		return c.startTimer()
+	case "toggle":
+		return c.toggle()
+	default:
+		return fmt.Errorf("Invalid control type:%v", c.ctype)
+	}
+}
+
+func (c *Control) startTimer() error {
 	if err := c.enablePin(); err != nil {
-		log.Printf("I couldn't enable pin %v, because %v", c.Pin, err)
+		log.Printf("I couldn't enable pin %v, because %v", c.pin, err)
 		return err
 	}
-	if err := ioutil.WriteFile(sysfs+"gpio"+c.Pin+"/value", []byte("1"), 0644); err != nil {
+	if err := ioutil.WriteFile(sysfs+"gpio"+c.pin+"/value", []byte("1"), 0644); err != nil {
 		return err
 	}
-	r := fmt.Sprintf("Pin %v got 'HIGH' on drugs for %v seconds", c.Pin, c.Delay)
-	if ch != nil {
-		ch <- r
-	}
-	time.Sleep(c.Delay)
-	if err := ioutil.WriteFile(sysfs+"gpio"+c.Pin+"/value", []byte("0"), 0644); err != nil {
-		return err
-	}
+	go func() {
+		time.Sleep(c.delay)
+		if err := ioutil.WriteFile(sysfs+"gpio"+c.pin+"/value", []byte("0"), 0644); err != nil {
+			log.Printf("Couldn't disable pin:%v error:%v", c.pin, err)
+		}
+	}()
 	return nil
 }
 
-// Toggle between high and low state
-func (c *Control) Toggle(ch chan string) error {
+func (c *Control) toggle() error {
 	if err := c.enablePin(); err != nil {
-		log.Printf("I couldn't enable pin %v, because %v", c.Pin, err)
+		log.Printf("I couldn't enable pin %v, because %v", c.pin, err)
 	}
 
-	d, err := ioutil.ReadFile(sysfs + "gpio" + c.Pin + "/value")
+	d, err := ioutil.ReadFile(sysfs + "gpio" + c.pin + "/value")
 	if err != nil {
-		log.Printf("Oh boy can't read the status of pin	%v becasue I don't have my glasses and %v", c.Pin, err)
+		log.Printf("Oh boy can't read the status of pin	%v becasue I don't have my glasses and %v", c.pin, err)
 	}
 
 	if string(d) == "1\n" {
-		if err := ioutil.WriteFile(sysfs+"gpio"+c.Pin+"/value", []byte("0"), 0644); err != nil {
+		if err := ioutil.WriteFile(sysfs+"gpio"+c.pin+"/value", []byte("0"), 0644); err != nil {
 			return err
 		}
-		r := fmt.Sprintf("pin %v just got 'LOW' on selfesteam", c.Pin)
-		ch <- r
 		return nil
 	}
-	if err := ioutil.WriteFile(sysfs+"gpio"+c.Pin+"/value", []byte("1"), 0644); err != nil {
+	if err := ioutil.WriteFile(sysfs+"gpio"+c.pin+"/value", []byte("1"), 0644); err != nil {
 		return err
 	}
-	r := fmt.Sprintf("pin %v just got 'HIGH' on drugs", c.Pin)
-	ch <- r
 	return nil
 }
